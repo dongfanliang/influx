@@ -15,17 +15,28 @@ func TestInfluxWrite(t *testing.T) {
 		Tags: map[string]string{
 			"id":       "rack",
 			"vendor":   "AWS",
-			"hostname": "hostname",
+			"hostname": "hostname1",
 		},
 		Data: []Point{},
 	}
 
+	serise1 := &Serise{
+		Metric: "cpu.used",
+		Tags: map[string]string{
+			"id":       "rack",
+			"vendor":   "AWS",
+			"hostname": "hostname",
+		},
+		Data: []Point{},
+	}
 	now := time.Now().Unix()
 	for i := 0; i < 10; i++ {
 		serise.Data = append(serise.Data, Point{Timestamp: now - int64(i*10), Value: float64(i)})
+		serise1.Data = append(serise.Data, Point{Timestamp: now - int64(i*10), Value: float64(i)})
 	}
 
 	client.BatchWrite("mydb1", "mytest", serise)
+	client.BatchWrite("mydb1", "mytest", serise1)
 	client.Close()
 }
 
@@ -33,10 +44,12 @@ func TestInfluxRead(t *testing.T) {
 	client := NewInfluxClient(url)
 	sql := `
 	from(bucket: "mydb1")
-	|> range(start: -5h)
+	|> range(start: -1h)
 	|> filter(fn: (r) =>
 	  r._measurement == "mytest"
 	)
+	|> group(columns: ["_time", "id"], mode:"by")
+	|> min()
 	`
 	data, err := client.Query(sql)
 	defer client.Close()
@@ -44,6 +57,6 @@ func TestInfluxRead(t *testing.T) {
 		t.Log(err)
 	}
 	for _, d := range data {
-		t.Logf("%#v", d)
+		t.Logf("%v", d)
 	}
 }

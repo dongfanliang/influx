@@ -1,9 +1,12 @@
 package influx
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	influxdb2 "github.com/influxdata/influxdb-client-go/v2"
@@ -41,27 +44,50 @@ func (this *InfluxClient) Query(sql string) ([]*Serise, error) {
 		return []*Serise{}, err
 	}
 
-	tmpData := map[int]*Serise{}
+	tmpData := map[string]*Serise{}
+	tags := map[string]string{}
+	key := ""
+	IsGroup := false
 	for result.Next() {
 		record := result.Record()
-		table := record.Table()
-		if _, ok := tmpData[table]; !ok {
-			tags := map[string]string{}
-			for k, v := range result.Record().Values() {
+		if result.TableChanged() {
+			tags = map[string]string{}
+			IsGroup = false
+
+			meta := result.TableMetadata()
+			for _, c := range meta.Columns() {
+				if c.IsGroup() {
+					IsGroup = true
+					name := c.Name()
+					if !strings.HasPrefix(name, "_") {
+						tags[name] = ""
+					}
+				}
+			}
+
+			for k, v := range record.Values() {
 				if strings.HasPrefix(k, "_") || k == "result" || k == "table" {
 					continue
 				}
-				tags[k] = v.(string)
-			}
 
-			tmpData[table] = &Serise{
+				if !IsGroup {
+					tags[k] = v.(string)
+				} else {
+					if _, ok := tags[k]; ok {
+						tags[k] = v.(string)
+					}
+				}
+			}
+			key = SortedTags(tags) + record.Field()
+			tmpData[key] = &Serise{
 				Metric: record.Field(),
 				Tags:   tags,
-				Data:   []Point{},
+				Data:   []Point{Point{Timestamp: record.Time().Unix(), Value: record.Value().(float64)}},
 			}
+			continue
 		}
 
-		tmpData[table].Data = append(tmpData[table].Data, Point{Timestamp: record.Time().Unix(), Value: record.Value().(float64)})
+		tmpData[key].Data = append(tmpData[key].Data, Point{Timestamp: record.Time().Unix(), Value: record.Value().(float64)})
 	}
 
 	seriseData := make([]*Serise, len(tmpData))
@@ -105,4 +131,51 @@ func (this *InfluxClient) Close() {
 	if this.Client != nil {
 		this.Client.Close()
 	}
+}
+
+var TmpBufferPool = sync.Pool{New: func() interface{} { return new(bytes.Buffer) }}
+
+func SortedTags(tags map[string]string) string {
+	if tags == nil {
+		return ""
+	}
+
+	size := len(tags)
+
+	if size == 0 {
+		return ""
+	}
+
+	ret := TmpBufferPool.Get().(*bytes.Buffer)
+	ret.Reset()
+	defer TmpBufferPool.Put(ret)
+
+	if size == 1 {
+		for k, v := range tags {
+			ret.WriteString(k)
+			ret.WriteString("=")
+			ret.WriteString(v)
+		}
+		return ret.String()
+	}
+
+	keys := make([]string, size)
+	i := 0
+	for k := range tags {
+		keys[i] = k
+		i++
+	}
+
+	sort.Strings(keys)
+
+	for j, key := range keys {
+		ret.WriteString(key)
+		ret.WriteString("=")
+		ret.WriteString(tags[key])
+		if j != size-1 {
+			ret.WriteString(",")
+		}
+	}
+
+	return ret.String()
 }
