@@ -11,45 +11,40 @@ func TestInfluxWrite(t *testing.T) {
 	_ = t
 	client := NewInfluxClient(url)
 	serise := &Serise{
-		Metric: "cpu.used",
+		Metric: "redis_endpoints",
 		Tags: map[string]string{
-			"id":       "rack",
-			"vendor":   "AWS",
-			"hostname": "hostname1",
+			"endpoints": "dm-xxx",
+		},
+		Data: []Point{},
+	}
+	serise1 := &Serise{
+		Metric: "redis_endpoints",
+		Tags: map[string]string{
+			"endpoints": "dm-xxx",
 		},
 		Data: []Point{},
 	}
 
-	serise1 := &Serise{
-		Metric: "cpu.used",
-		Tags: map[string]string{
-			"id":       "rack",
-			"vendor":   "AWS",
-			"hostname": "hostname",
-		},
-		Data: []Point{},
-	}
 	now := time.Now().Unix()
 	for i := 0; i < 10; i++ {
-		serise.Data = append(serise.Data, Point{Timestamp: now - int64(i*10), Value: float64(i)})
+		serise.Data = append(serise.Data, Point{Timestamp: now - int64(i*10), Value: 0.0})
 		serise1.Data = append(serise.Data, Point{Timestamp: now - int64(i*10), Value: float64(i)})
 	}
 
-	client.BatchWrite("mydb1", "mytest", serise)
-	client.BatchWrite("mydb1", "mytest", serise1)
+	client.BatchWrite("sla_meta", "redis_endpoints", serise)
+	client.BatchWrite("sla_meta", "redis_endpoints", serise1)
 	client.Close()
 }
 
 func TestInfluxRead(t *testing.T) {
 	client := NewInfluxClient(url)
 	sql := `
-	from(bucket: "mydb1")
-	|> range(start: -1h)
+	from(bucket: "sla_meta")
+	|> range(start: -5h)
 	|> filter(fn: (r) =>
-	  r._measurement == "mytest"
+	  r._measurement == "redis_endpoints"
 	)
-	|> group(columns: ["_time", "id"], mode:"by")
-	|> min()
+	|> group(columns: ["endpoints"], mode:"by")
 	`
 	data, err := client.Query(sql)
 	defer client.Close()

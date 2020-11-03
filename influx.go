@@ -24,16 +24,35 @@ type Serise struct {
 	Data   []Point           `json:"data"`
 }
 
+type WriteAPI struct {
+	Api api.WriteAPI
+}
+
 type InfluxClient struct {
 	Client    influxdb2.Client
-	WriteAPIs map[string]api.WriteAPI
+	WriteAPIs map[string]*WriteAPI
+	sync.RWMutex
+}
+
+func (this *InfluxClient) GetWriteAPI(key string) (*WriteAPI, bool) {
+	this.RLock()
+	v, ok := this.WriteAPIs[key]
+	this.RUnlock()
+
+	return v, ok
+}
+
+func (this *InfluxClient) SetWriteAPI(key string, api *WriteAPI) {
+	this.Lock()
+	this.WriteAPIs[key] = api
+	this.Unlock()
 }
 
 func NewInfluxClient(url string) *InfluxClient {
 	client := influxdb2.NewClientWithOptions(url, "", influxdb2.DefaultOptions().SetPrecision(time.Second))
 	return &InfluxClient{
 		Client:    client,
-		WriteAPIs: make(map[string]api.WriteAPI),
+		WriteAPIs: make(map[string]*WriteAPI),
 	}
 }
 
@@ -44,13 +63,22 @@ func (this *InfluxClient) Query(sql string) ([]*Serise, error) {
 		return []*Serise{}, err
 	}
 
-	tmpData := map[string]*Serise{}
-	tags := map[string]string{}
-	key := ""
-	IsGroup := false
+	var (
+		tmpData = map[string]*Serise{}
+		tags    = map[string]string{}
+		tmpTime = map[int64]float64{}
+		tmpV    float64
+		IsGroup = false
+		key     = ""
+		ok      bool
+	)
+
 	for result.Next() {
 		record := result.Record()
+		ts := record.Time().Unix()
+		v := record.Value().(float64)
 		if result.TableChanged() {
+			tmpTime = map[int64]float64{}
 			tags = map[string]string{}
 			IsGroup = false
 
@@ -73,7 +101,7 @@ func (this *InfluxClient) Query(sql string) ([]*Serise, error) {
 				if !IsGroup {
 					tags[k] = v.(string)
 				} else {
-					if _, ok := tags[k]; ok {
+					if _, ok = tags[k]; ok {
 						tags[k] = v.(string)
 					}
 				}
@@ -82,12 +110,15 @@ func (this *InfluxClient) Query(sql string) ([]*Serise, error) {
 			tmpData[key] = &Serise{
 				Metric: record.Field(),
 				Tags:   tags,
-				Data:   []Point{Point{Timestamp: record.Time().Unix(), Value: record.Value().(float64)}},
+				Data:   []Point{Point{Timestamp: ts, Value: v}},
 			}
-			continue
+			tmpTime[ts] = v
+		} else {
+			tmpV, ok = tmpTime[ts]
+			if !ok || v < tmpV {
+				tmpData[key].Data = append(tmpData[key].Data, Point{Timestamp: ts, Value: v})
+			}
 		}
-
-		tmpData[key].Data = append(tmpData[key].Data, Point{Timestamp: record.Time().Unix(), Value: record.Value().(float64)})
 	}
 
 	seriseData := make([]*Serise, len(tmpData))
@@ -100,31 +131,30 @@ func (this *InfluxClient) Query(sql string) ([]*Serise, error) {
 }
 
 func (this *InfluxClient) BatchWrite(db, table string, serise *Serise) {
-	if _, ok := this.WriteAPIs[db]; !ok {
-		writeAPI := this.Client.WriteAPI("org", db)
-		errorsCh := writeAPI.Errors()
+	writeAPI, ok := this.GetWriteAPI(db)
+	if !ok {
+		writeAPI = &WriteAPI{Api: this.Client.WriteAPI("org", db)}
+		this.SetWriteAPI(db, writeAPI)
+
+		errorsCh := writeAPI.Api.Errors()
 		go func() {
 			for err := range errorsCh {
-				fmt.Printf("influx write error: %s\n", err.Error())
+				fmt.Printf("influx write db: %s, table: %s, error: %s\n", db, table, err.Error())
 			}
 		}()
-
-		this.WriteAPIs[db] = this.Client.WriteAPI("org", db)
 	}
 
-	writeAPI := this.WriteAPIs[db]
 	tags := serise.Tags
-	metric := serise.Metric
 	for i, _ := range serise.Data {
 		p := influxdb2.NewPoint(
 			table,
 			tags,
-			map[string]interface{}{metric: serise.Data[i].Value},
+			map[string]interface{}{"__value__": serise.Data[i].Value},
 			time.Unix(serise.Data[i].Timestamp, 0),
 		)
-		writeAPI.WritePoint(p)
+		writeAPI.Api.WritePoint(p)
 	}
-	writeAPI.Flush()
+	writeAPI.Api.Flush()
 }
 
 func (this *InfluxClient) Close() {
