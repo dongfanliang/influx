@@ -66,8 +66,6 @@ func (this *InfluxClient) Query(sql string) ([]*Serise, error) {
 	var (
 		tmpData = map[string]*Serise{}
 		tags    = map[string]string{}
-		tmpTime = map[int64]float64{}
-		tmpV    float64
 		IsGroup = false
 		key     = ""
 		ok      bool
@@ -78,7 +76,6 @@ func (this *InfluxClient) Query(sql string) ([]*Serise, error) {
 		ts := record.Time().Unix()
 		v := record.Value().(float64)
 		if result.TableChanged() {
-			tmpTime = map[int64]float64{}
 			tags = map[string]string{}
 			IsGroup = false
 
@@ -112,12 +109,8 @@ func (this *InfluxClient) Query(sql string) ([]*Serise, error) {
 				Tags:   tags,
 				Data:   []Point{Point{Timestamp: ts, Value: v}},
 			}
-			tmpTime[ts] = v
 		} else {
-			tmpV, ok = tmpTime[ts]
-			if !ok || v < tmpV {
-				tmpData[key].Data = append(tmpData[key].Data, Point{Timestamp: ts, Value: v})
-			}
+			tmpData[key].Data = append(tmpData[key].Data, Point{Timestamp: ts, Value: v})
 		}
 	}
 
