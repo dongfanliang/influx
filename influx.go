@@ -48,8 +48,8 @@ func (this *InfluxClient) SetWriteAPI(key string, api *WriteAPI) {
 	this.Unlock()
 }
 
-func NewInfluxClient(url string) *InfluxClient {
-	client := influxdb2.NewClientWithOptions(url, "", influxdb2.DefaultOptions().SetPrecision(time.Second))
+func NewInfluxClient(url, token string) *InfluxClient {
+	client := influxdb2.NewClientWithOptions(url, token, influxdb2.DefaultOptions().SetPrecision(time.Second))
 	return &InfluxClient{
 		Client:    client,
 		WriteAPIs: make(map[string]*WriteAPI),

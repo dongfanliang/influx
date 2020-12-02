@@ -9,7 +9,7 @@ var url = "http://localhost:8086"
 
 func TestInfluxWrite(t *testing.T) {
 	_ = t
-	client := NewInfluxClient(url)
+	client := NewInfluxClient(url, "") // token: username:password
 	serise := &Serise{
 		Metric: "redis_endpoints",
 		Tags: map[string]string{
