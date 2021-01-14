@@ -1,4 +1,4 @@
-module influx
+module github.com/dongfanliang/influx
 
 go 1.15
 
